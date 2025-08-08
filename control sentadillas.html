@@ -1,0 +1,322 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Diario de Sentadillas</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .input-section {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        input[type="date"], input[type="time"], input[type="number"], input[type="text"] {
+            padding: 8px;
+            width: 100px;
+            margin-right: 10px;
+            flex-grow: 1;
+        }
+        #noteInput {
+            width: 150px;
+            flex-grow: 1;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #218838;
+        }
+        .delete-btn {
+            background-color: #dc3545;
+            margin-left: 10px;
+        }
+        #squatList, #report {
+            margin-top: 20px;
+        }
+        .record, .report-text {
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+        }
+        canvas {
+            margin-top: 20px;
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Control Diario de Sentadillas</h1>
+        <div class="input-section">
+            <input type="date" id="dateInput" required>
+            <input type="time" id="hourInput" required>
+            <input type="number" id="squatInput" min="0" placeholder="Nº de sentadillas" required>
+            <input type="number" id="goalInput" min="0" placeholder="Objetivo diario" style="width: 100px;">
+            <input type="text" id="noteInput" placeholder="Nota (opcional)" style="width: 150px; flex-grow: 1;">
+            <button onclick="addSquat()">Agregar</button>
+            <button onclick="copyData()">Exportar Datos</button>
+        </div>
+        <div id="squatList"></div>
+        <div id="report">
+            <h3>Informe de Progreso</h3>
+            <div id="reportText" class="report-text"></div>
+        </div>
+        <canvas id="progressChart"></canvas>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // Cargar datos desde localStorage o inicializar array vacío
+        let squatData = JSON.parse(localStorage.getItem('squatData')) || [];
+
+        // Inicializar el gráfico
+        const ctx = document.getElementById('progressChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Sentadillas por Día',
+                    data: [],
+                    borderColor: '#28a745',
+                    fill: false
+                }]
+            },
+            options: {
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Sentadillas' }
+                    },
+                    x: {
+                        title: { display: true, text: 'Fecha y Hora' }
+                    }
+                }
+            }
+        });
+
+        // Función para formatear fecha y hora
+        function formatDateTime(dateStr, timeStr) {
+            const [year, month, day] = dateStr.split('-');
+            const [hours, minutes] = timeStr.split(':');
+            const date = new Date(year, month - 1, day, hours, minutes);
+            return date.toLocaleString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Función para agregar un registro de sentadillas
+        function addSquat() {
+            const dateInput = document.getElementById('dateInput').value;
+            const hourInput = document.getElementById('hourInput').value;
+            const squatInput = document.getElementById('squatInput').value;
+            const noteInput = document.getElementById('noteInput').value || 'Sin nota';
+            const squats = parseInt(squatInput);
+            if (!dateInput || !hourInput || isNaN(squats) || squats < 0) {
+                alert('Por favor, ingresa una fecha, hora y número válido de sentadillas.');
+                return;
+            }
+
+            const datetimeStr = formatDateTime(dateInput, hourInput);
+            const existingRecord = squatData.find(record => record.datetime === datetimeStr);
+
+            if (existingRecord) {
+                existingRecord.squats = squats;
+                existingRecord.note = noteInput;
+            } else {
+                squatData.push({ datetime: datetimeStr, squats: squats, note: noteInput });
+            }
+
+            localStorage.setItem('squatData', JSON.stringify(squatData));
+            updateSquatList();
+            updateChart();
+            updateReport();
+            checkGoal();
+            document.getElementById('squatInput').value = '';
+            document.getElementById('noteInput').value = '';
+        }
+
+        // Función para eliminar un registro
+        function deleteSquat(index) {
+            squatData.splice(index, 1);
+            localStorage.setItem('squatData', JSON.stringify(squatData));
+            updateSquatList();
+            updateChart();
+            updateReport();
+        }
+
+        // Función para actualizar la lista de registros
+        function updateSquatList() {
+            const squatList = document.getElementById('squatList');
+            squatList.innerHTML = '';
+            squatData.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+            squatData.forEach((record, index) => {
+                const div = document.createElement('div');
+                div.className = 'record';
+                const text = document.createElement('span');
+                text.textContent = `${record.datetime}: ${record.squats} sentadillas (Nota: ${record.note})`;
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = 'Eliminar';
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.onclick = () => deleteSquat(index);
+                div.appendChild(text);
+                div.appendChild(deleteBtn);
+                squatList.appendChild(div);
+            });
+        }
+
+        // Función para actualizar el gráfico
+        function updateChart() {
+            const sortedData = [...squatData].sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+            chart.data.labels = sortedData.map(record => record.datetime);
+            chart.data.datasets[0].data = sortedData.map(record => record.squats);
+            chart.update();
+        }
+
+        // Función para generar el informe
+        function updateReport() {
+            if (squatData.length === 0) {
+                document.getElementById('reportText').textContent = 'No hay datos suficientes para un informe.';
+                return;
+            }
+
+            // Agrupar datos por día
+            const dailyTotals = {};
+            squatData.forEach(record => {
+                const date = record.datetime.split(',')[0].trim();
+                dailyTotals[date] = (dailyTotals[date] || 0) + record.squats;
+            });
+
+            const dates = Object.keys(dailyTotals);
+            if (dates.length < 2) {
+                document.getElementById('reportText').textContent = 'Necesitas al menos 2 días de datos para un informe.';
+                return;
+            }
+
+            // Calcular promedios diarios
+            const dailyAverages = dates.map(date => ({
+                date: date,
+                average: dailyTotals[date] / (squatData.filter(r => r.datetime.split(',')[0].trim() === date).length || 1)
+            }));
+
+            // Ordenar por fecha para comparar
+            dailyAverages.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+            // Analizar tendencia
+            let trend = '';
+            for (let i = 1; i < dailyAverages.length; i++) {
+                const prevAvg = dailyAverages[i - 1].average;
+                const currAvg = dailyAverages[i].average;
+                if (currAvg > prevAvg) {
+                    trend += `El promedio de sentadillas el ${dailyAverages[i].date} (${currAvg.toFixed(2)}) aumentó respecto al ${dailyAverages[i - 1].date} (${prevAvg.toFixed(2)}).\n`;
+                } else if (currAvg < prevAvg) {
+                    trend += `El promedio de sentadillas el ${dailyAverages[i].date} (${currAvg.toFixed(2)}) disminuyó respecto al ${dailyAverages[i - 1].date} (${prevAvg.toFixed(2)}).\n`;
+                } else {
+                    trend += `El promedio de sentadillas el ${dailyAverages[i].date} (${currAvg.toFixed(2)}) se mantuvo igual que el ${dailyAverages[i - 1].date} (${prevAvg.toFixed(2)}).\n`;
+                }
+            }
+
+            // Resumen semanal
+            const oneWeekAgo = new Date();
+            oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+            const weeklyData = squatData.filter(record => new Date(record.datetime) >= oneWeekAgo);
+            const totalWeekly = weeklyData.reduce((sum, record) => sum + record.squats, 0);
+            const averageWeekly = weeklyData.length ? totalWeekly / weeklyData.length : 0;
+
+            document.getElementById('reportText').textContent = `Informe de progreso:\n${trend}Resumen semanal (del ${oneWeekAgo.toLocaleDateString('es-ES')} al ${new Date().toLocaleDateString('es-ES')}): Total ${totalWeekly}, Promedio ${averageWeekly.toFixed(2)} por registro.\nTotal de días registrados: ${dates.length}.`;
+        }
+
+        // Función para verificar el objetivo diario
+        function checkGoal() {
+            const goalInput = document.getElementById('goalInput').value;
+            const goal = parseInt(goalInput) || 0;
+            if (goal === 0) return;
+
+            const today = new Date().toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            const todayTotal = squatData
+                .filter(record => record.datetime.split(',')[0].trim() === today)
+                .reduce((sum, record) => sum + record.squats, 0);
+
+            if (todayTotal >= goal) {
+                alert(`¡Felicidades! Has alcanzado tu objetivo de ${goal} sentadillas hoy (${todayTotal} realizadas).`);
+            }
+        }
+
+        // Función para exportar datos a un archivo
+        function copyData() {
+            const text = squatData.map(record => `${record.datetime}: ${record.squats} sentadillas (Nota: ${record.note || 'Sin nota'})`).join('\n');
+            const blob = new Blob([text], { type: 'text/plain' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'sentadillas_registro_' + new Date().toLocaleDateString('es-ES').replace(/\//g, '-') + '.txt';
+            a.click();
+            URL.revokeObjectURL(a.href);
+            alert('Datos exportados como archivo .txt.');
+        }
+
+        // Cargar datos iniciales
+        updateSquatList();
+        updateChart();
+        updateReport();
+    </script>
+</body>
+</html>
